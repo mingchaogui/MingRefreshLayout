@@ -7,220 +7,253 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
-import android.widget.RelativeLayout;
+import android.widget.FrameLayout;
 import android.widget.Scroller;
 
 
-public class MingRefreshLayout extends RelativeLayout {
+public class MingRefreshLayout extends FrameLayout {
 
-	// 初始状态
-	private static final int IDLE = 0;
+    // 初始状态
+    private static final int IDLE = 0;
     // 初始状态
     private static final int PULL_DOWN = 1;
-	// 释放刷新
-	private static final int READY_TO_REFRESH = 2;
-	// 正在刷新
-	private static final int REFRESHING = 3;
-	// 正在加载
-	private static final int LOADING = 4;
+    // 释放刷新
+    private static final int READY_TO_REFRESH = 2;
+    // 正在刷新
+    private static final int REFRESHING = 3;
+    // 正在加载
+    private static final int LOADING = 4;
     // 刷新完毕
     private static final int END_REFRESH = 5;
-	// 加载完毕
-	private static final int END_LOAD = 6;
+    // 加载完毕
+    private static final int END_LOAD = 6;
+    // 加载完毕到初始状态的中间状态
+    private static final int TO_IDLE = 7;
 
-	// 当前状态
-	private int mState = IDLE;
-    // 是否正在触摸屏幕
-    private boolean mTouching = false;
-	// 上一个事件点Y坐标
-	private int mLastY;
+    // 当前状态
+    private int mState = IDLE;
+    // 上一个onInterceptTouchEvent事件点Y坐标
+    private float mInterceptLastY;
+    // 上一个onTouchEvent事件点Y坐标
+    private float mLastY;
 
-	// Scroller
-	private Scroller mScroller;
-    // ViewConfiguration
-    private ViewConfiguration mViewConfiguration;
+    // Scroller
+    private Scroller mScroller;
+    // 只有滑动距离大于这个值时才会尝试去拦截事件
+    private int mTouchSlop;
     // 滑动阻力，下拉滑动距离 = 手指滑动距离 / 阻力
     private float mTouchDrag = 1.5f;
     // 刷新/加载完毕后，RefreshView/LoadView滞留时间
     private int mSpinDelay = 1000;
 
-	private View mRefreshView;
-	private RefreshViewHandler mRefreshViewHandler;
-	private View mContentView;
-	private View mLoadView;
-	private LoadViewHandler mLoadViewHandler;
+    private View mRefreshView;
+    private RefreshViewHandler mRefreshViewHandler;
+    private View mContentView;
+    private View mLoadView;
+    private LoadViewHandler mLoadViewHandler;
 
-	// 刷新回调接口
-	private RefreshHandler mRefreshHandler;
+    // 刷新回调接口
+    private RefreshHandler mRefreshHandler;
 
-	public MingRefreshLayout(Context context) {
-		super(context);
-
-        init();
-	}
-
-	public MingRefreshLayout(Context context, AttributeSet attrs) {
-		super(context, attrs);
+    public MingRefreshLayout(Context context) {
+        super(context);
 
         init();
-	}
-
-	public MingRefreshLayout(Context context, AttributeSet attrs, int defStyle) {
-		super(context, attrs, defStyle);
-
-        init();
-	}
-
-    private void init() {
-        mViewConfiguration = ViewConfiguration.get(getContext());
-		mScroller = new Scroller(getContext());
     }
 
-	@Override
-	protected void onLayout(boolean changed, int l, int t, int r, int b) {
-		if (mContentView == null) {
-			for (int i = 0; i < this.getChildCount(); i++) {
-				View child = this.getChildAt(i);
-				if (child != mRefreshView && child != mLoadView) {
-					mContentView = child;
+    public MingRefreshLayout(Context context, AttributeSet attrs) {
+        super(context, attrs);
 
-					break;
-				}
-			}
-		}
+        init();
+    }
+
+    public MingRefreshLayout(Context context, AttributeSet attrs, int defStyle) {
+        super(context, attrs, defStyle);
+
+        init();
+    }
+
+    private void init() {
+        mTouchSlop = ViewConfiguration.get(getContext()).getScaledTouchSlop() / 6;
+        mScroller = new Scroller(getContext());
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int l, int t, int r, int b) {
+        // 以第一个非RefreshView也非LoadView的View为ContentView
+        if (mContentView == null) {
+            for (int i = 0; i < this.getChildCount(); i++) {
+                View child = this.getChildAt(i);
+                if (child != mRefreshView && child != mLoadView) {
+                    mContentView = child;
+
+                    break;
+                }
+            }
+        }
 
         int childTop = 0;
-		if (mRefreshView != null) {
+        if (mRefreshView != null) {
             childTop = -mRefreshView.getMeasuredHeight();
 
-			mRefreshView.layout(
+            mRefreshView.layout(
                     0,
                     childTop,
-					mRefreshView.getMeasuredWidth(),
+                    mRefreshView.getMeasuredWidth(),
                     childTop + mRefreshView.getMeasuredHeight()
             );
 
             childTop = mRefreshView.getBottom();
-		}
+        }
 
-		if (mContentView != null) {
-			mContentView.layout(
+        if (mContentView != null) {
+            mContentView.layout(
                     0,
                     childTop,
-					mContentView.getMeasuredWidth(),
+                    mContentView.getMeasuredWidth(),
                     childTop + mContentView.getMeasuredHeight()
             );
 
             childTop = mContentView.getBottom();
-		}
-		if (mLoadView != null && mLoadView.getVisibility() != GONE) {
-			mLoadView.layout(
+        }
+        if (mLoadView != null && mLoadView.getVisibility() != GONE) {
+            mLoadView.layout(
                     0,
                     childTop,
-					mLoadView.getMeasuredWidth(),
+                    mLoadView.getMeasuredWidth(),
                     childTop + mLoadView.getMeasuredHeight()
             );
-		}
-	}
+        }
+    }
 
-	/**
-	 * 由我决定是否分发事件，防止事件冲突
-	 *
-	 * @see android.view.ViewGroup#dispatchTouchEvent(android.view.MotionEvent)
-	 */
-	@Override
-	public boolean dispatchTouchEvent(MotionEvent ev) {
-        int y = (int) ev.getY(ev.getPointerCount() - 1);
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        switch (ev.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                mScroller.forceFinished(true);
+                mLastY = ev.getY(ev.getPointerCount() - 1);
 
-		switch (ev.getActionMasked()) {
-			case MotionEvent.ACTION_DOWN:
-                mTouching = true;
-                mLastY = y;
-                mScroller.abortAnimation();
+                break;
+        }
 
-				break;
+        return super.dispatchTouchEvent(ev);
+    }
 
-			case MotionEvent.ACTION_POINTER_DOWN:
-			case MotionEvent.ACTION_POINTER_UP:
-                // 重置Y轴位置，解决多点操作的冲突问题
-                mLastY = y;
+    @Override
+    public boolean onInterceptTouchEvent(MotionEvent ev) {
+        // 取最后一个（放下的）手指坐标
+        float y = ev.getY(ev.getPointerCount() - 1);
 
-				break;
-
-			case MotionEvent.ACTION_MOVE:
+        switch (ev.getActionMasked()) {
+            case MotionEvent.ACTION_MOVE:
                 // 滑动距离
-				int deltaY = mLastY - y;
-                // 对实际滑动距离做缩小，造成用力拉的感觉
+                float deltaY = mInterceptLastY - y;
+                if (Math.abs(deltaY) < mTouchSlop) {
+                    break;
+                } else if (deltaY < 0) {// 手指向下滑动
+                    return mRefreshHandler.canRefresh()
+                            || getScrollY() > 0;// ScrollY大于0时，LoadView会被显示，应拦截此事件使手指可以把LoadView推回不可显示的位置
+                } else {// 手指向上滑动
+                    return mRefreshHandler.canLoad()
+                            || getScrollY() < 0;// ScrollY小于0时，RefreshView会被显示，应拦截此事件使手指可以把RefreshView推回不可显示的位置
+                }
+        }
+
+        // 记录手指新位置
+        mInterceptLastY = y;
+
+        return false;
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        float y = event.getY(event.getPointerCount() - 1);
+
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_MOVE:
+                // 滑动距离
+                float deltaY = mLastY - y;
+                // 对滑动距离做缩小，造成用力拉的感觉
                 int dragY = (int) (deltaY / mTouchDrag);
-                // 记录手指新位置
-                mLastY = y;
+                // 实际滑动距离
+                int scrollDY = dragY;
 
                 int minY = mRefreshHandler.canRefresh() && mState != LOADING ? -getHeight() : 0;
                 int maxY = mRefreshHandler.canLoad() && mState != REFRESHING ? getHeight() : 0;
-                int currY = mScroller.getCurrY();
-                float newScrollY = currY + dragY;
+                int startX = mScroller.getCurrX();
+                int startY = mScroller.getCurrY();
+                float newScrollY = startY + scrollDY;
                 if (newScrollY < minY) {
-                    dragY = minY - currY;
+                    scrollDY = minY - startY;
                 } else if (newScrollY > maxY) {
-                    dragY = maxY - currY;
-                }
-                if (dragY != 0) {
-                    mScroller.startScroll(mScroller.getCurrX(), mScroller.getCurrY(), mScroller.getCurrX(), dragY, 0);
-                    invalidate();
-
-                    int finalY = mScroller.getFinalY();
-                    if (finalY < 0) {
-                        if (mState != REFRESHING && mState != END_REFRESH) {
-                            if (finalY <= -mRefreshView.getHeight()) {
-                                changeState(READY_TO_REFRESH);
-                            } else {
-                                changeState(PULL_DOWN);
-                            }
-                        }
-                    } else if (mState == IDLE && finalY > mRefreshView.getHeight()) {
-                        changeState(LOADING);
-                    }
-
-                    // 防止在滑动过程中误触发子View的事件
-                    if (Math.abs(deltaY) > mViewConfiguration.getScaledTouchSlop()) {
-                        // 把当前事件的Action设置为ACTION_CANCEL（后面会继续派发给子View处理）
-                        ev.setAction(MotionEvent.ACTION_CANCEL);
-                    }
+                    scrollDY = maxY - startY;
                 }
 
-				break;
+                mScroller.startScroll(startX, startY, 0, scrollDY, 0);
+                invalidate();
+                onFingerMove();
+
+                break;
 
             case MotionEvent.ACTION_CANCEL:
-			case MotionEvent.ACTION_UP:
-                mTouching = false;
-
-				if (mState == READY_TO_REFRESH) {
-					changeState(REFRESHING);
-				} else if (mState != LOADING) {
-                    changeState(IDLE);
+            case MotionEvent.ACTION_UP:
+                if (mState == IDLE) {
+                    break;
+                } else if (mState == READY_TO_REFRESH) {
+                    changeState(REFRESHING);
+                } else if (mState != LOADING) {
+                    changeState(TO_IDLE);
                 }
                 invalidScroll();
 
-				break;
-		}
+                break;
+        }
 
-        return super.dispatchTouchEvent(ev);
-	}
+        // 记录手指新位置
+        mLastY = y;
+
+        return super.onTouchEvent(event);
+    }
+
+    public void onFingerMove() {
+        int currY = mScroller.getCurrY();
+        // 特殊状态下不会触发状态改变
+        if (mState != REFRESHING && mState != END_REFRESH
+                && mState != LOADING && mState != END_LOAD
+                && mState != TO_IDLE) {
+            if (currY < 0) {
+                if (currY <= -mRefreshView.getHeight()) {
+                    changeState(READY_TO_REFRESH);
+                } else {
+                    changeState(PULL_DOWN);
+                }
+            } else if (currY > 0) {
+                changeState(LOADING);
+            } else {
+                changeState(IDLE);
+            }
+        }
+    }
 
     @Override
     public void computeScroll() {
         super.computeScroll();
 
+        int currX = mScroller.getCurrX();
+        int currY = mScroller.getCurrY();
+
         if (mScroller.computeScrollOffset()) {
-            scrollTo(mScroller.getCurrX(), mScroller.getCurrY());
+            scrollTo(currX, currY);
             postInvalidate();
+        } else if (currY == 0 && mState != REFRESHING && mState != LOADING) {// 回滚到了待机位置
+            changeState(IDLE);
         }
     }
 
-	/**
-	 * 根据状态回弹到正确位置
-	 */
-	private void invalidScroll() {
+    /**
+     * 根据状态回弹到正确位置
+     */
+    private void invalidScroll() {
         // 默认滚动到Y0位置
         int y = -mScroller.getCurrY();
         switch (mState) {
@@ -242,74 +275,59 @@ public class MingRefreshLayout extends RelativeLayout {
                 break;
         }
 
-        if (y != 0) {
-            mScroller.startScroll(
-                    mScroller.getCurrX(),
-                    mScroller.getCurrY(),
-                    mScroller.getCurrX(),
-                    y
-            );
-            invalidate();
-        }
-	}
+        mScroller.startScroll(
+                mScroller.getCurrX(),
+                mScroller.getCurrY(),
+                0,
+                y
+        );
+        invalidate();
+    }
 
     private void changeState(int state) {
-		changeState(state, null);
-	}
+        changeState(state, null);
+    }
 
-	private void changeState(int state, Object data) {
+    private void changeState(int state, Object data) {
         if (mState == state) {
             return;
         }
+        mState = state;
 
-		mState = state;
-		switch (mState) {
+        switch (state) {
             case PULL_DOWN:// 下拉
                 mRefreshViewHandler.onPullDown();
 
                 break;
 
-			case READY_TO_REFRESH:// 释放刷新
-				mRefreshViewHandler.onReadyToRefresh();
+            case READY_TO_REFRESH:// 释放刷新
+                mRefreshViewHandler.onReadyToRefresh();
 
-				break;
+                break;
 
-			case REFRESHING:// 正在刷新
-				mRefreshViewHandler.onBeginRefresh();
-				mRefreshHandler.onRefresh();
+            case REFRESHING:// 正在刷新
+                mRefreshViewHandler.onBeginRefresh();
+                mRefreshHandler.onRefresh();
 
-				break;
+                break;
 
-			case LOADING:// 正在加载
-				mLoadViewHandler.onBeginLoad();
-				mRefreshHandler.onLoad();
+            case LOADING:// 正在加载
+                mLoadViewHandler.onBeginLoad();
+                mRefreshHandler.onLoad();
 
-				break;
+                break;
 
-			case END_REFRESH:// 结束刷新
-				mRefreshViewHandler.onEndRefresh(data);
-                this.postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (!mTouching) {
-                            changeState(IDLE);
-                            invalidScroll();
-                        }
-                    }
-                }, mSpinDelay);
+            case END_REFRESH:// 结束刷新
+                mRefreshViewHandler.onEndRefresh(data);
 
-				break;
+                break;
 
-			case END_LOAD:// 结束加载
-				mLoadViewHandler.onEndLoad(data);
-                if (!mTouching) {
-                    changeState(IDLE);
-                    invalidScroll();
-                }
+            case END_LOAD:// 结束加载
+                mLoadViewHandler.onEndLoad(data);
 
-				break;
-		}
-	}
+                break;
+        }
+    }
 
     public void setRefreshHandler(RefreshHandler handler) {
         mRefreshHandler = handler;
@@ -351,6 +369,7 @@ public class MingRefreshLayout extends RelativeLayout {
     public void beginLoad() {
         if (mState == IDLE) {
             changeState(LOADING);
+            invalidScroll();
         }
     }
 
@@ -367,6 +386,13 @@ public class MingRefreshLayout extends RelativeLayout {
         }
 
         changeState(END_REFRESH, data);
+        this.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                changeState(TO_IDLE);
+                invalidScroll();
+            }
+        }, mSpinDelay);
     }
 
     public void endLoad() {
@@ -382,5 +408,7 @@ public class MingRefreshLayout extends RelativeLayout {
         }
 
         changeState(END_LOAD, data);
+        changeState(TO_IDLE);
+        invalidScroll();
     }
 }
